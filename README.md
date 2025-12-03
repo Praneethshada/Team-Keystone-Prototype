@@ -3,10 +3,12 @@
 Use Link: `https://praneethshada.github.io/Book-Spine-Sensor/`
 ### Smart Library Shelf Prototype
 #### Spine Width Detection System
+
 1. Project Overview
 - This prototype simulates an IoT-enabled "Smart Shelf" designed for libraries to automatically detect misplaced books. This concept uses a mechanical spine width measurement system.
 #### The Core Idea
-By measuring the precise width of the book inserted into a specific slot and comparing it against a "Calibrated" (correct) value, the system can determine if the wrong book has been returned to that location.
+- By measuring the precise width of the book inserted into a specific slot and comparing it against a "Calibrated" (correct) value, the system can determine if the wrong book has been returned to that location.
+
 2. How It Works (Logic)
 - The simulation uses a strict "Calibration" logic rather than just checking if a book is present.
 #### Calibration (The "Set" Phase):
