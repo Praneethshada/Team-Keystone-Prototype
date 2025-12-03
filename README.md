@@ -1,5 +1,6 @@
 # Team Keystone - Design Thinking Project
 ## Book Spine Sensor
+Use Link: `https://praneethshada.github.io/Book-Spine-Sensor/`
 ### Smart Library Shelf Prototype
 #### Spine Width Detection System
 1. Project Overview
