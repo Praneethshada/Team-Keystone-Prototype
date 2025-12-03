@@ -1,0 +1,709 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Detection using Spine Width</title>
+    <!-- Google Fonts -->
+    <link
+      href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      body {
+        margin: 0;
+        overflow: hidden;
+        background: radial-gradient(
+          circle at center,
+          #f0f0f0 0%,
+          #c0c0c0 100%
+        ); /* Professional gradient bg */
+        font-family: "Roboto", sans-serif;
+        user-select: none;
+      }
+
+      #ui-layer {
+        position: absolute;
+        top: 20px;
+        left: 20px;
+        background: rgba(255, 255, 255, 0.85); /* Slightly transparent */
+        backdrop-filter: blur(10px); /* Modern blur effect */
+        padding: 20px;
+        border-radius: 12px;
+        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+        width: 200px;
+        border: 1px solid rgba(255, 255, 255, 0.3);
+      }
+
+      h3 {
+        margin: 0 0 12px 0;
+        color: #222;
+        font-size: 1.1rem;
+        font-weight: 500;
+      }
+
+      .status-row {
+        display: flex;
+        align-items: center;
+        margin-bottom: 15px;
+        padding: 10px;
+        background: rgba(0, 0, 0, 0.05);
+        border-radius: 8px;
+        font-size: 0.95rem;
+        font-weight: 500;
+      }
+
+      .led {
+        width: 16px;
+        height: 16px;
+        border-radius: 50%;
+        margin-right: 10px;
+        background: #ccc;
+        border: 2px solid #aaa;
+        box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.2);
+        transition: all 0.3s ease;
+      }
+      .led.green {
+        background: #2ecc71;
+        border-color: #27ae60;
+        box-shadow: 0 0 8px #2ecc71, inset 0 1px 2px rgba(0, 0, 0, 0.2);
+      }
+      .led.red {
+        background: #e74c3c;
+        border-color: #c0392b;
+        box-shadow: 0 0 8px #e74c3c, inset 0 1px 2px rgba(0, 0, 0, 0.2);
+      }
+
+      .btn {
+        background: linear-gradient(135deg, #444, #222);
+        color: white;
+        border: none;
+        padding: 10px;
+        border-radius: 8px;
+        cursor: pointer;
+        font-size: 0.85rem;
+        font-weight: 500;
+        width: 100%;
+        transition: transform 0.1s, box-shadow 0.1s;
+        box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
+      }
+      .btn:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+      }
+      .btn:active {
+        transform: translateY(0px);
+        box-shadow: 0 2px 3px rgba(0, 0, 0, 0.2);
+      }
+
+      .hint {
+        font-size: 0.8rem;
+        color: #666;
+        margin-top: 15px;
+        line-height: 1.5;
+      }
+      .hint strong {
+        color: #333;
+      }
+    </style>
+    <!-- Three.js Library -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  </head>
+  <body>
+    <div id="ui-layer">
+      <h3>Smart Spine Sensor</h3>
+      <div class="status-row">
+        <div id="status-led" class="led green"></div>
+        <span id="status-text" style="color: #27ae60">System OK</span>
+      </div>
+      <button class="btn" onclick="calibrate()">SET / CALIBRATE</button>
+      <p class="hint">
+        <strong>Drag & Drop</strong> books to move them.<br />
+        • Empty Slot: OK (Ignored)<br />
+        • Wrong Width: <span style="color: #e74c3c; font-weight: 500">RED</span
+        ><br />
+        • Matching Width:
+        <span style="color: #2ecc71; font-weight: 500">GREEN</span>
+      </p>
+    </div>
+
+    <script>
+      // --- AUDIO SYSTEM (Web Audio API) ---
+      const AudioContext = window.AudioContext || window.webkitAudioContext;
+      const audioCtx = new AudioContext();
+
+      // Simple synthesizer for UI sounds
+      function playTone(freq, type, duration, delay = 0, vol = 0.1) {
+        if (audioCtx.state === "suspended") audioCtx.resume();
+
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+
+        osc.type = type;
+        osc.frequency.setValueAtTime(freq, audioCtx.currentTime + delay);
+
+        gain.gain.setValueAtTime(vol, audioCtx.currentTime + delay);
+        gain.gain.exponentialRampToValueAtTime(
+          0.001,
+          audioCtx.currentTime + delay + duration
+        );
+
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+
+        osc.start(audioCtx.currentTime + delay);
+        osc.stop(audioCtx.currentTime + delay + duration);
+      }
+
+      function playSound(action) {
+        switch (action) {
+          case "pickup":
+            // Short high blip
+            playTone(600, "sine", 0.1, 0, 0.1);
+            break;
+          case "drop":
+            // Lower thud
+            playTone(150, "triangle", 0.15, 0, 0.2);
+            break;
+          case "error":
+            // Discordant buzz
+            playTone(150, "sawtooth", 0.4, 0, 0.1);
+            playTone(140, "sawtooth", 0.4, 0.05, 0.1);
+            break;
+          case "success":
+            // Major triad chime
+            playTone(523.25, "sine", 0.4, 0, 0.1); // C5
+            playTone(659.25, "sine", 0.4, 0.1, 0.1); // E5
+            playTone(783.99, "sine", 0.6, 0.2, 0.1); // G5
+            break;
+          case "calibrate":
+            // Computer processing sound
+            playTone(800, "square", 0.1, 0, 0.05);
+            playTone(1200, "square", 0.1, 0.1, 0.05);
+            playTone(600, "square", 0.2, 0.2, 0.05);
+            break;
+        }
+      }
+
+      // --- Configuration ---
+      const SLOT_COUNT = 10;
+      const SHELF_WIDTH = 28;
+      const BOOK_HEIGHT = 5.5;
+      const BOOK_DEPTH = 3.8;
+      const SLOT_SPACING = SHELF_WIDTH / SLOT_COUNT;
+
+      // --- Globals ---
+      let scene, camera, renderer;
+      let raycaster, mouse;
+      let dragPlane;
+
+      // State
+      let books = [];
+      let slots = [];
+      let isDragging = false;
+      let selectedBook = null;
+      let offset = new THREE.Vector3();
+      let originalPos = new THREE.Vector3();
+
+      // Track previous status to prevent audio spam
+      let previousSystemState = "green";
+
+      // Materials
+      const mats = {
+        wood: new THREE.MeshStandardMaterial({
+          color: 0x8b5a2b,
+          roughness: 0.6,
+          metalness: 0.1,
+          side: THREE.DoubleSide,
+        }),
+        metal: new THREE.MeshStandardMaterial({
+          color: 0xaaaaaa,
+          metalness: 0.7,
+          roughness: 0.2,
+        }),
+        sensorPad: new THREE.MeshStandardMaterial({
+          color: 0x333333,
+          roughness: 0.8,
+        }),
+        sensorPadError: new THREE.MeshStandardMaterial({
+          color: 0xaa0000,
+          emissive: 0x550000,
+          roughness: 0.8,
+        }),
+        ledOn: new THREE.MeshStandardMaterial({
+          color: 0x00ff00,
+          emissive: 0x00ff00,
+          emissiveIntensity: 1,
+        }),
+        ledOff: new THREE.MeshStandardMaterial({
+          color: 0xff0000,
+          emissive: 0xff0000,
+          emissiveIntensity: 1,
+        }),
+        glass: new THREE.MeshPhysicalMaterial({
+          color: 0xffffff,
+          metalness: 0,
+          roughness: 0,
+          transmission: 0.9,
+          opacity: 0.3,
+          transparent: true,
+        }),
+        paper: new THREE.MeshStandardMaterial({
+          color: 0xfdfdf0,
+          roughness: 0.9,
+          metalness: 0,
+        }),
+      };
+
+      function init() {
+        scene = new THREE.Scene();
+
+        camera = new THREE.PerspectiveCamera(
+          45,
+          window.innerWidth / window.innerHeight,
+          1,
+          100
+        );
+        camera.position.set(0, 5, 26);
+        camera.lookAt(0, 1, 0);
+
+        renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.shadowMap.enabled = true;
+        renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+        document.body.appendChild(renderer.domElement);
+
+        const amb = new THREE.AmbientLight(0xffffff, 0.4);
+        scene.add(amb);
+
+        const keyLight = new THREE.DirectionalLight(0xffffff, 0.8);
+        keyLight.position.set(10, 15, 10);
+        keyLight.castShadow = true;
+        keyLight.shadow.mapSize.width = 2048;
+        keyLight.shadow.mapSize.height = 2048;
+        keyLight.shadow.camera.near = 0.5;
+        keyLight.shadow.camera.far = 50;
+        keyLight.shadow.bias = -0.0001;
+        scene.add(keyLight);
+
+        const fillLight = new THREE.DirectionalLight(0xffffff, 0.3);
+        fillLight.position.set(-10, 5, 10);
+        scene.add(fillLight);
+
+        const rimLight = new THREE.DirectionalLight(0xffffff, 0.2);
+        rimLight.position.set(0, 20, -20);
+        scene.add(rimLight);
+
+        raycaster = new THREE.Raycaster();
+        mouse = new THREE.Vector2();
+        dragPlane = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0);
+
+        buildShelfSystem();
+        createBooks();
+        calibrate();
+
+        window.addEventListener("resize", onResize);
+        window.addEventListener("mousedown", onMouseDown);
+        window.addEventListener("mousemove", onMouseMove);
+        window.addEventListener("mouseup", onMouseUp);
+
+        animate();
+      }
+
+      // --- Build Logic ---
+
+      function buildShelfSystem() {
+        const baseGeo = new THREE.BoxGeometry(
+          SHELF_WIDTH + 2,
+          1.2,
+          BOOK_DEPTH + 1
+        );
+        const base = new THREE.Mesh(baseGeo, mats.wood);
+        base.position.y = -0.6;
+        base.receiveShadow = true;
+        base.castShadow = true;
+        scene.add(base);
+
+        const backGeo = new THREE.BoxGeometry(SHELF_WIDTH + 2, 8, 0.5);
+        const back = new THREE.Mesh(backGeo, mats.wood);
+        back.position.set(0, 3.4, -BOOK_DEPTH / 2 - 0.25);
+        back.receiveShadow = true;
+        scene.add(back);
+
+        const railGeo = new THREE.BoxGeometry(
+          SHELF_WIDTH,
+          0.4,
+          BOOK_DEPTH + 0.5
+        );
+        const rail = new THREE.Mesh(railGeo, mats.metal);
+        rail.position.set(0, 0.2, 0.5);
+        rail.castShadow = true;
+        rail.receiveShadow = true;
+        scene.add(rail);
+
+        const startX = -SHELF_WIDTH / 2;
+
+        for (let i = 0; i < SLOT_COUNT; i++) {
+          const slotX = startX + i * SLOT_SPACING + SLOT_SPACING / 2;
+
+          const divGeo = new THREE.BoxGeometry(0.1, 2, BOOK_DEPTH);
+          const divider = new THREE.Mesh(divGeo, mats.metal);
+          divider.position.set(startX + i * SLOT_SPACING, 1, 0);
+          divider.castShadow = true;
+          scene.add(divider);
+
+          if (i === SLOT_COUNT - 1) {
+            const lastDiv = new THREE.Mesh(divGeo, mats.metal);
+            lastDiv.position.set(startX + (i + 1) * SLOT_SPACING, 1, 0);
+            lastDiv.castShadow = true;
+            scene.add(lastDiv);
+          }
+
+          const padGeo = new THREE.BoxGeometry(
+            SLOT_SPACING - 0.4,
+            0.1,
+            BOOK_DEPTH - 0.5
+          );
+          const pad = new THREE.Mesh(padGeo, mats.sensorPad.clone());
+          pad.position.set(slotX, 0.45, 0.5);
+          pad.receiveShadow = true;
+          scene.add(pad);
+
+          slots.push({
+            index: i,
+            x: slotX,
+            calibratedWidth: null,
+            currentBook: null,
+            mesh: pad,
+          });
+        }
+
+        const stemGeo = new THREE.CylinderGeometry(0.5, 0.5, 2.5, 32);
+        const stem = new THREE.Mesh(stemGeo, mats.metal);
+        stem.position.set(SHELF_WIDTH / 2 + 2, 0.5, 0);
+        stem.castShadow = true;
+        scene.add(stem);
+
+        const bulbGeo = new THREE.SphereGeometry(0.8, 32, 32);
+        const bulb = new THREE.Mesh(bulbGeo, mats.glass);
+        bulb.position.set(SHELF_WIDTH / 2 + 2, 2.0, 0);
+        scene.add(bulb);
+
+        const filamentGeo = new THREE.SphereGeometry(0.35, 16, 16);
+        window.ledMesh = new THREE.Mesh(filamentGeo, mats.ledOn);
+        window.ledMesh.position.copy(bulb.position);
+        scene.add(window.ledMesh);
+
+        window.ledLight = new THREE.PointLight(0x00ff00, 1, 10);
+        window.ledLight.position.copy(bulb.position);
+        scene.add(window.ledLight);
+
+        const stackGeo = new THREE.BoxGeometry(
+          SHELF_WIDTH + 4,
+          0.5,
+          BOOK_DEPTH + 4
+        );
+        const stackMat = new THREE.MeshStandardMaterial({
+          color: 0x444444,
+          roughness: 0.8,
+        });
+        const stack = new THREE.Mesh(stackGeo, stackMat);
+        stack.position.set(0, -7, 2);
+        stack.receiveShadow = true;
+        scene.add(stack);
+      }
+
+      function createSpineTexture(num, colorHex) {
+        const canvas = document.createElement("canvas");
+        canvas.width = 128;
+        canvas.height = 512;
+        const ctx = canvas.getContext("2d");
+
+        ctx.fillStyle = colorHex;
+        ctx.fillRect(0, 0, 128, 512);
+
+        ctx.fillStyle = "rgba(0,0,0,0.1)";
+        for (let i = 0; i < 1000; i++) {
+          ctx.fillRect(Math.random() * 128, Math.random() * 512, 1, 2);
+        }
+
+        ctx.fillStyle = "#c0a040";
+        ctx.fillRect(0, 50, 128, 10);
+        ctx.fillRect(0, 450, 128, 10);
+
+        ctx.fillStyle = "#f0f0f0";
+        ctx.font = 'bold 60px "Roboto Condensed", Arial';
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.save();
+        ctx.translate(64, 256);
+        ctx.rotate(-Math.PI / 2);
+        ctx.fillText("BOOK " + num, 0, 0);
+        ctx.restore();
+
+        const tex = new THREE.CanvasTexture(canvas);
+        tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+        return tex;
+      }
+
+      function createBooks() {
+        const colors = [
+          "#8e44ad",
+          "#2980b9",
+          "#27ae60",
+          "#d35400",
+          "#c0392b",
+          "#34495e",
+          "#16a085",
+          "#7f8c8d",
+        ];
+
+        for (let i = 0; i < SLOT_COUNT; i++) {
+          const maxWidth = SLOT_SPACING - 0.4;
+          const width = maxWidth * 0.5 + Math.random() * (maxWidth * 0.5);
+
+          const col = colors[i % colors.length];
+          const tex = createSpineTexture(i + 1, col);
+
+          const coverMat = new THREE.MeshStandardMaterial({
+            color: col,
+            roughness: 0.7,
+          });
+          const spineMat = new THREE.MeshStandardMaterial({
+            map: tex,
+            roughness: 0.7,
+          });
+
+          const matsArr = [
+            coverMat,
+            coverMat,
+            mats.paper,
+            mats.paper,
+            spineMat,
+            mats.paper,
+          ];
+
+          const geo = new THREE.BoxGeometry(width, BOOK_HEIGHT, BOOK_DEPTH);
+          const book = new THREE.Mesh(geo, matsArr);
+
+          const slot = slots[i];
+          book.position.set(slot.x, 0.4 + BOOK_HEIGHT / 2, 0.5);
+          book.castShadow = true;
+          book.receiveShadow = true;
+
+          book.userData = {
+            id: i,
+            width: width,
+            isDraggable: true,
+            currentSlotIndex: i,
+          };
+
+          slot.currentBook = book;
+          scene.add(book);
+          books.push(book);
+        }
+      }
+
+      // --- Interaction Logic (Drag & Drop) ---
+
+      function onMouseDown(e) {
+        // Ensure AudioContext is running (requires user interaction)
+        if (audioCtx.state === "suspended") {
+          audioCtx.resume();
+        }
+
+        updateMouse(e);
+        raycaster.setFromCamera(mouse, camera);
+        const intersects = raycaster.intersectObjects(books);
+
+        if (intersects.length > 0) {
+          isDragging = true;
+          selectedBook = intersects[0].object;
+
+          playSound("pickup");
+
+          const intersectionPoint = intersects[0].point;
+          offset.copy(intersectionPoint).sub(selectedBook.position);
+          originalPos.copy(selectedBook.position);
+
+          const currentSlotIdx = selectedBook.userData.currentSlotIndex;
+          if (currentSlotIdx !== -1) {
+            slots[currentSlotIdx].currentBook = null;
+          }
+
+          selectedBook.position.z += 1.5;
+
+          checkSystemStatus();
+        }
+      }
+
+      function onMouseMove(e) {
+        if (!isDragging || !selectedBook) return;
+
+        updateMouse(e);
+        raycaster.setFromCamera(mouse, camera);
+
+        const intersects = raycaster.ray.intersectPlane(
+          dragPlane,
+          new THREE.Vector3()
+        );
+
+        if (intersects) {
+          let newPos = intersects.sub(offset);
+          newPos.z = 2.5;
+          selectedBook.position.copy(newPos);
+        }
+      }
+
+      function onMouseUp(e) {
+        if (!isDragging) return;
+        isDragging = false;
+
+        if (selectedBook) {
+          let droppedInSlot = false;
+
+          for (let slot of slots) {
+            const dx = Math.abs(selectedBook.position.x - slot.x);
+            const dy = Math.abs(
+              selectedBook.position.y - (0.4 + BOOK_HEIGHT / 2)
+            );
+
+            if (dx < SLOT_SPACING / 2 && dy < 4) {
+              if (slot.currentBook === null) {
+                selectedBook.position.set(slot.x, 0.4 + BOOK_HEIGHT / 2, 0.5);
+                selectedBook.userData.currentSlotIndex = slot.index;
+                slot.currentBook = selectedBook;
+                droppedInSlot = true;
+                break;
+              }
+            }
+          }
+
+          if (!droppedInSlot) {
+            if (selectedBook.position.y < -2) {
+              const stackY = -7 + 0.25 + BOOK_HEIGHT / 2;
+              selectedBook.position.set(selectedBook.position.x, stackY, 2);
+              selectedBook.userData.currentSlotIndex = -1;
+              playSound("drop");
+            } else {
+              selectedBook.position.copy(originalPos);
+              if (selectedBook.userData.currentSlotIndex !== -1) {
+                slots[selectedBook.userData.currentSlotIndex].currentBook =
+                  selectedBook;
+              }
+              // Returned to original spot is effectively a "drop"
+              playSound("drop");
+            }
+          } else {
+            // Dropped successfully in a slot
+            playSound("drop");
+          }
+
+          selectedBook = null;
+          checkSystemStatus();
+        }
+      }
+
+      function updateMouse(e) {
+        mouse.x = (e.clientX / window.innerWidth) * 2 - 1;
+        mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
+      }
+
+      // --- Core Sensor Logic ---
+
+      window.calibrate = function () {
+        playSound("calibrate");
+
+        for (let slot of slots) {
+          if (slot.currentBook) {
+            slot.calibratedWidth = slot.currentBook.userData.width;
+            flashPad(slot.mesh, 0x2ecc71);
+          } else {
+            slot.calibratedWidth = null;
+          }
+        }
+        checkSystemStatus();
+
+        const btn = document.querySelector(".btn");
+        const old = btn.innerText;
+        btn.innerText = "CALIBRATED!";
+        setTimeout(() => (btn.innerText = old), 1000);
+      };
+
+      function checkSystemStatus() {
+        let systemError = false;
+
+        for (let slot of slots) {
+          const book = slot.currentBook;
+          slot.mesh.material = mats.sensorPad;
+
+          if (book === null) continue;
+
+          if (slot.calibratedWidth !== null) {
+            const diff = Math.abs(book.userData.width - slot.calibratedWidth);
+            if (diff > 0.05) {
+              systemError = true;
+              slot.mesh.material = mats.sensorPadError;
+            }
+          } else {
+            systemError = true;
+            slot.mesh.material = mats.sensorPadError;
+          }
+        }
+
+        // Logic for playing status sounds only on CHANGE
+        let currentSystemState = systemError ? "red" : "green";
+
+        if (currentSystemState !== previousSystemState) {
+          if (currentSystemState === "red") {
+            playSound("error");
+          } else {
+            playSound("success");
+          }
+          previousSystemState = currentSystemState;
+        }
+
+        // Update Visuals
+        if (systemError) {
+          window.ledMesh.material = mats.ledOff;
+          window.ledLight.color.setHex(0xff0000);
+          document.getElementById("status-led").className = "led red";
+          const statusText = document.getElementById("status-text");
+          statusText.innerHTML = "Width Mismatch!";
+          statusText.style.color = "#e74c3c";
+        } else {
+          window.ledMesh.material = mats.ledOn;
+          window.ledLight.color.setHex(0x00ff00);
+          document.getElementById("status-led").className = "led green";
+          const statusText = document.getElementById("status-text");
+          statusText.innerHTML = "System OK";
+          statusText.style.color = "#2ecc71";
+        }
+      }
+
+      function flashPad(mesh, colorHex) {
+        const oldMat = mesh.material;
+        mesh.material = new THREE.MeshStandardMaterial({
+          color: colorHex,
+          emissive: colorHex,
+        });
+        setTimeout(() => {
+          mesh.material = oldMat;
+        }, 300);
+      }
+
+      function onResize() {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+      }
+
+      function animate() {
+        requestAnimationFrame(animate);
+        renderer.render(scene, camera);
+      }
+
+      init();
+    </script>
+  </body>
+</html>
